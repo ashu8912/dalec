@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/cavaliergopher/rpm"
 	"github.com/containerd/platforms"
+	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/frontend/dockerfile/shell"
@@ -24,9 +26,11 @@ import (
 	moby_buildkit_v1_frontend "github.com/moby/buildkit/frontend/gateway/pb"
 	"github.com/moby/go-archive/compression"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
+	pkgerrors "github.com/pkg/errors"
 	"github.com/project-dalec/dalec"
 	"github.com/project-dalec/dalec/frontend"
 	"github.com/project-dalec/dalec/frontend/pkg/bkfs"
+	"github.com/project-dalec/dalec/test/testenv"
 	"golang.org/x/exp/maps"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -1535,6 +1539,290 @@ Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/boot
 
 		testEnv.RunTest(ctx, t, func(ctx context.Context, client gwclient.Client) {
 			req := newSolveRequest(withBuildTarget(testConfig.Target.Container), withSpec(ctx, t, spec))
+			solveT(ctx, t, client, req)
+		})
+	})
+
+	t.Run("gomod replace directive", func(t *testing.T) {
+		t.Parallel()
+		ctx := startTestSpan(baseCtx, t)
+
+		spec := &dalec.Spec{
+			Name:        "test-gomod-replace",
+			Version:     "0.0.1",
+			Revision:    "1",
+			License:     "MIT",
+			Website:     "https://github.com/project-dalec/dalec",
+			Vendor:      "Dalec",
+			Packager:    "Dalec",
+			Description: "Testing gomod replace directive",
+			Sources: map[string]dalec.Source{
+				"src": {
+					Inline: &dalec.SourceInline{
+						Dir: &dalec.SourceInlineDir{
+							Files: map[string]*dalec.SourceInlineFile{
+								"go.mod": {Contents: "module example.com/test\n\ngo 1.18\n\nrequire github.com/stretchr/testify v1.9.0\n"},
+								"main.go": {Contents: `package main
+import (
+	"fmt"
+	"github.com/stretchr/testify/assert"
+)
+func main() {
+	fmt.Println("hello")
+	assert.True(nil, true)
+}
+`},
+							},
+						},
+					},
+					Generate: []*dalec.SourceGenerator{
+						{
+							Gomod: &dalec.GeneratorGomod{
+								Edits: &dalec.GomodEdits{
+									Replace: []dalec.GomodReplace{
+										{Original: "github.com/stretchr/testify", Update: "github.com/stretchr/testify@v1.8.0"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			Dependencies: &dalec.PackageDependencies{
+				Build: map[string]dalec.PackageConstraints{
+					testConfig.GetPackage("golang"): {},
+				},
+			},
+			Build: dalec.ArtifactBuild{
+				Steps: []dalec.BuildStep{
+					// Verify go.mod was patched with replace directive and correct version
+					{Command: "grep -F 'replace github.com/stretchr/testify' ./src/go.mod"},
+					{Command: "grep -F 'github.com/stretchr/testify v1.8.0' ./src/go.mod"},
+					// Build the code - will fail if replace didn't work
+					{Command: "cd ./src && go build"},
+				},
+			},
+		}
+
+		testEnv.RunTest(ctx, t, func(ctx context.Context, client gwclient.Client) {
+			req := newSolveRequest(withBuildTarget(testConfig.Target.Container), withSpec(ctx, t, spec))
+			solveT(ctx, t, client, req)
+		})
+	})
+
+	t.Run("gomod replace directive", func(t *testing.T) {
+		t.Parallel()
+		ctx := startTestSpan(baseCtx, t)
+
+		spec := &dalec.Spec{
+			Name:        "test-gomod-replace",
+			Version:     "0.0.1",
+			Revision:    "1",
+			License:     "MIT",
+			Website:     "https://github.com/project-dalec/dalec",
+			Vendor:      "Dalec",
+			Packager:    "Dalec",
+			Description: "Testing gomod replace directive",
+			Sources: map[string]dalec.Source{
+				"src": {
+					Inline: &dalec.SourceInline{
+						Dir: &dalec.SourceInlineDir{
+							Files: map[string]*dalec.SourceInlineFile{
+								"go.mod": {Contents: "module example.com/test\n\ngo 1.18\n"},
+								"main.go": {Contents: `package main
+import (
+	"fmt"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/objx"
+)
+func main() {
+	fmt.Println("hello")
+	assert.True(nil, true)
+	m := objx.Map{"name": "test"}
+	fmt.Println(m.Get("name"))
+}
+`},
+							},
+						},
+					},
+					Generate: []*dalec.SourceGenerator{
+						{
+							Gomod: &dalec.GeneratorGomod{
+								Edits: &dalec.GomodEdits{
+									// Replace objx (another stretchr module) with a specific version.
+									Replace: []dalec.GomodReplace{
+										{Original: "github.com/stretchr/objx", Update: "github.com/stretchr/objx@v0.5.0"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			Dependencies: &dalec.PackageDependencies{
+				Build: map[string]dalec.PackageConstraints{
+					testConfig.GetPackage("golang"): {},
+				},
+			},
+			Build: dalec.ArtifactBuild{
+				Steps: []dalec.BuildStep{
+					// Verify replace directive was applied with correct version
+					{Command: "grep -F 'replace github.com/stretchr/objx' ./src/go.mod"},
+					{Command: "grep -F 'github.com/stretchr/objx v0.5.0' ./src/go.mod"},
+					// Build the code - will fail if edits didn't work
+					{Command: "cd ./src && go build"},
+				},
+			},
+		}
+
+		testEnv.RunTest(ctx, t, func(ctx context.Context, client gwclient.Client) {
+			req := newSolveRequest(withBuildTarget(testConfig.Target.Container), withSpec(ctx, t, spec))
+			solveT(ctx, t, client, req)
+		})
+	})
+
+	t.Run("gomod multi-module with paths", func(t *testing.T) {
+		t.Parallel()
+		ctx := startTestSpan(baseCtx, t)
+
+		// Create a multi-module repo with two modules
+		contextSt := llb.Scratch().
+			File(llb.Mkdir("/module1", 0755)).
+			File(llb.Mkfile("/module1/go.mod", 0644, []byte("module example.com/module1\n\ngo 1.18\n"))).
+			File(llb.Mkfile("/module1/main.go", 0644, []byte(`package main
+import (
+	"fmt"
+	"github.com/stretchr/testify/assert"
+)
+func main() {
+	fmt.Println("module1")
+	assert.True(nil, true)
+}
+`))).
+			File(llb.Mkdir("/module2", 0755)).
+			File(llb.Mkfile("/module2/go.mod", 0644, []byte("module example.com/module2\n\ngo 1.18\n"))).
+			File(llb.Mkfile("/module2/main.go", 0644, []byte(`package main
+import (
+	"fmt"
+	"github.com/stretchr/testify/assert"
+)
+func main() {
+	fmt.Println("module2")
+	assert.True(nil, true)
+}
+`)))
+
+		const contextName = "multi-module-edits"
+		spec := &dalec.Spec{
+			Name:        "test-gomod-multi-module",
+			Version:     "0.0.1",
+			Revision:    "1",
+			License:     "MIT",
+			Website:     "https://github.com/project-dalec/dalec",
+			Vendor:      "Dalec",
+			Packager:    "Dalec",
+			Description: "Testing gomod multi-module with paths",
+			Sources: map[string]dalec.Source{
+				"src": {
+					Context: &dalec.SourceContext{Name: contextName},
+					Generate: []*dalec.SourceGenerator{
+						{
+							Gomod: &dalec.GeneratorGomod{
+								Paths: []string{"module1", "module2"},
+								Edits: &dalec.GomodEdits{
+									Replace: []dalec.GomodReplace{
+										{Original: "github.com/stretchr/testify@v1.7.0", Update: "github.com/stretchr/testify@v1.8.0"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			Dependencies: &dalec.PackageDependencies{
+				Build: map[string]dalec.PackageConstraints{
+					testConfig.GetPackage("golang"): {},
+				},
+			},
+			Build: dalec.ArtifactBuild{
+				Steps: []dalec.BuildStep{
+					// Verify both modules were patched with replace directive
+					{Command: "grep -F 'replace github.com/stretchr/testify' ./src/module1/go.mod"},
+					{Command: "grep -F 'replace github.com/stretchr/testify' ./src/module2/go.mod"},
+					{Command: "cd ./src/module1 && go build"},
+					{Command: "cd ./src/module2 && go build"},
+				},
+			},
+		}
+
+		testEnv.RunTest(ctx, t, func(ctx context.Context, client gwclient.Client) {
+			req := newSolveRequest(withBuildTarget(testConfig.Target.Container), withSpec(ctx, t, spec), withBuildContext(ctx, t, contextName, contextSt))
+			solveT(ctx, t, client, req)
+		})
+	})
+
+	t.Run("gomod with subpath", func(t *testing.T) {
+		t.Parallel()
+		ctx := startTestSpan(baseCtx, t)
+
+		// Create a context with a subdirectory structure
+		contextSt := llb.Scratch().
+			File(llb.Mkdir("/subdir", 0755)).
+			File(llb.Mkfile("/subdir/go.mod", 0644, []byte("module example.com/test\n\ngo 1.18\n"))).
+			File(llb.Mkfile("/subdir/main.go", 0644, []byte(`package main
+import (
+	"fmt"
+	"github.com/stretchr/testify/assert"
+)
+func main() {
+	fmt.Println("hello")
+	assert.True(nil, true)
+}
+`)))
+
+		const contextName = "subpath-test"
+		spec := &dalec.Spec{
+			Name:        "test-gomod-subpath",
+			Version:     "0.0.1",
+			Revision:    "1",
+			License:     "MIT",
+			Website:     "https://github.com/project-dalec/dalec",
+			Vendor:      "Dalec",
+			Packager:    "Dalec",
+			Description: "Testing gomod with subpath",
+			Sources: map[string]dalec.Source{
+				"src": {
+					Context: &dalec.SourceContext{Name: contextName},
+					Generate: []*dalec.SourceGenerator{
+						{
+							Subpath: "subdir",
+							Gomod: &dalec.GeneratorGomod{
+								Edits: &dalec.GomodEdits{
+									Replace: []dalec.GomodReplace{
+										{Original: "github.com/stretchr/testify@v1.7.0", Update: "github.com/stretchr/testify@v1.8.0"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			Dependencies: &dalec.PackageDependencies{
+				Build: map[string]dalec.PackageConstraints{
+					testConfig.GetPackage("golang"): {},
+				},
+			},
+			Build: dalec.ArtifactBuild{
+				Steps: []dalec.BuildStep{
+					// Verify the go.mod in subdir was patched with replace directive
+					{Command: "grep -F 'replace github.com/stretchr/testify' ./src/subdir/go.mod"},
+					{Command: "cd ./src/subdir && go build"},
+				},
+			},
+		}
+
+		testEnv.RunTest(ctx, t, func(ctx context.Context, client gwclient.Client) {
+			req := newSolveRequest(withBuildTarget(testConfig.Target.Container), withSpec(ctx, t, spec), withBuildContext(ctx, t, contextName, contextSt))
 			solveT(ctx, t, client, req)
 		})
 	})
@@ -3089,44 +3377,69 @@ func testLinuxPackageTestsFail(ctx context.Context, t *testing.T, cfg testLinuxC
 			},
 		}
 
-		testEnv.RunTest(ctx, t, func(ctx context.Context, client gwclient.Client) {
-			checkErr := func(err error) {
+		expectedErrors := []string{
+			(&dalec.CheckOutputError{Path: "/non-existing-file", Kind: dalec.CheckFileNotExistsKind, Expected: "exists=true", Actual: "exists=false"}).Error(),
+			(&dalec.CheckOutputError{Path: "/", Kind: dalec.CheckFilePermissionsKind, Expected: "-rw-r--r--", Actual: "-rwxr-xr-x"}).Error(),
+			(&dalec.CheckOutputError{Path: "/", Kind: dalec.CheckFileIsDirKind, Expected: "ModeFile", Actual: "ModeDir"}).Error(),
+			(&dalec.CheckOutputError{Path: "/some_symlink1", Kind: dalec.CheckFileLinkTargetPathKind, Expected: "/not-a-real-path1", Actual: "/usr/bin/a-thing-for-symlinking"}).Error(),
+			(&dalec.CheckOutputError{Path: "/some_symlink2", Kind: dalec.CheckFileLinkTargetPathKind, Expected: "/not-a-real-path2", Actual: "/usr/bin/a-thing-for-symlinking"}).Error(),
+			(&dalec.CheckOutputError{Path: "/some_symlink3", Kind: dalec.CheckFileNotExistsKind, Expected: "exists=true", Actual: "exists=false"}).Error(),
+			(&dalec.CheckOutputError{Path: "/some_symlink4", Kind: dalec.CheckFileLinkTargetPathKind, Expected: "/incorrect-target", Actual: "/not-a-real-path4"}).Error(),
+			"step did not complete successfully: exit code: 42",
+			"stdout not hello",
+			"stderr not hello",
+		}
 
-				v := (&dalec.CheckOutputError{Path: "/non-existing-file", Kind: dalec.CheckFileNotExistsKind, Expected: "exists=true", Actual: "exists=false"}).Error()
-				assert.ErrorContains(t, err, v)
+		testForTarget := func(target string) func(t *testing.T) {
+			return func(t *testing.T) {
+				t.Parallel()
 
-				v = (&dalec.CheckOutputError{Path: "/", Kind: dalec.CheckFilePermissionsKind, Expected: "-rw-r--r--", Actual: "-rwxr-xr-x"}).Error()
-				assert.ErrorContains(t, err, v)
+				dir := t.TempDir()
+				f, err := os.OpenFile(filepath.Join(dir, "out.txt"), os.O_CREATE|os.O_RDWR, 0o600)
+				assert.NilError(t, err)
+				defer f.Close()
 
-				v = (&dalec.CheckOutputError{Path: "/", Kind: dalec.CheckFileIsDirKind, Expected: "ModeFile", Actual: "ModeDir"}).Error()
-				assert.ErrorContains(t, err, v)
+				consumeLogs := func(status *client.SolveStatus) {
+					if status == nil {
+						return
+					}
 
-				v = (&dalec.CheckOutputError{Path: "/some_symlink1", Kind: dalec.CheckFileLinkTargetPathKind, Expected: "/not-a-real-path1", Actual: "/usr/bin/a-thing-for-symlinking"}).Error()
-				assert.ErrorContains(t, err, v)
+					for _, v := range status.Logs {
+						_, err := f.Write(v.Data)
+						assert.NilError(t, err)
+					}
+				}
 
-				v = (&dalec.CheckOutputError{Path: "/some_symlink2", Kind: dalec.CheckFileLinkTargetPathKind, Expected: "/not-a-real-path2", Actual: "/usr/bin/a-thing-for-symlinking"}).Error()
-				assert.ErrorContains(t, err, v)
+				ctx := startTestSpan(ctx, t)
+				testEnv.RunTest(ctx, t, func(ctx context.Context, client gwclient.Client) {
+					sr := newSolveRequest(withSpec(ctx, t, spec), withBuildTarget(target))
+					_, err := client.Solve(ctx, sr)
+					assert.Assert(t, err != nil)
 
-				v = (&dalec.CheckOutputError{Path: "/some_symlink3", Kind: dalec.CheckFileNotExistsKind, Expected: "exists=true", Actual: "exists=false"}).Error()
-				assert.ErrorContains(t, err, v)
+					// Make sure the error is an exit error
+					var xErr *moby_buildkit_v1_frontend.ExitError
+					assert.Check(t, cmp.ErrorType(pkgerrors.Cause(err), xErr))
 
-				v = (&dalec.CheckOutputError{Path: "/some_symlink4", Kind: dalec.CheckFileLinkTargetPathKind, Expected: "/incorrect-target", Actual: "/not-a-real-path4"}).Error()
-				assert.ErrorContains(t, err, v)
+				}, testenv.WithSolveStatusFn(consumeLogs))
 
-				assert.ErrorContains(t, err, "step did not complete successfully: exit code: 42")
-				assert.ErrorContains(t, err, "stdout not hello")
-				assert.ErrorContains(t, err, "stderr not hello")
+				_, err = f.Seek(0, 0)
+				assert.NilError(t, err)
 
+				dt, err := io.ReadAll(f)
+				assert.NilError(t, err)
+
+				for _, expectErr := range expectedErrors {
+					assert.Check(t, cmp.Contains(string(dt), expectErr))
+				}
+
+				if t.Failed() {
+					t.Log("---- Full build log ----\n" + string(dt))
+				}
 			}
+		}
 
-			sr := newSolveRequest(withSpec(ctx, t, spec), withBuildTarget(cfg.Target.Package))
-			_, err := client.Solve(ctx, sr)
-			checkErr(err)
-
-			sr = newSolveRequest(withSpec(ctx, t, spec), withBuildTarget(cfg.Target.Container))
-			_, err = client.Solve(ctx, sr)
-			checkErr(err)
-		})
+		t.Run("package", testForTarget(cfg.Target.Package))
+		t.Run("container", testForTarget(cfg.Target.Container))
 	})
 
 	t.Run("positive test", func(t *testing.T) {

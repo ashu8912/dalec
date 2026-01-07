@@ -53,12 +53,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2.13.2
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2 # v2.13.3
         with:
           egress-policy: audit
 
       - name: checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
           go-version: '1.24'
@@ -67,7 +67,7 @@ jobs:
       # Note: There is also a "lint" target in docker-bake.hcl for local linting
       # If you make changes to this, please make sure to also update the local linting target
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@e7fa5ac41e1cf5b7d48e45e42232ce7ada589601 # v9.1.0
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
           version: v2.1.6
           args: --timeout=30m
@@ -110,7 +110,7 @@ jobs:
     # Right now this is handled by the e2e suite, but we can migrate that here.
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2.13.2
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2 # v2.13.3
         with:
           egress-policy: audit
 
@@ -120,7 +120,7 @@ jobs:
           cache: false
 
       - name: checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - uses: ./.github/actions/enable-containerd
 
@@ -158,6 +158,89 @@ jobs:
         run: docker run --rm --privileged tonistiigi/binfmt:latest --install all
       - name: Setup source policy
         uses: ./.github/actions/setup-source-policy
+      - name: Aggressive cleanup
+        run: |
+          echo "================ INITIAL DISK USAGE ================"
+          df -h
+          echo
+
+          echo "================ DOCKER: SYSTEM PRUNE (IMAGES + VOLUMES) ================"
+          echo "Removing stopped containers, unused images, networks, and volumes..."
+          docker system prune -f --all --volumes || true
+          df -h
+          echo
+
+          echo "================ REMOVE JAVA (JDKs) ================"
+          echo "Removing all JDKs from /usr/lib/jvm"
+          sudo rm -rf /usr/lib/jvm || true
+          df -h
+          echo
+
+          echo "================ REMOVE .NET SDKs ================"
+          echo "Removing .NET SDKs from /usr/share/dotnet"
+          sudo rm -rf /usr/share/dotnet || true
+          df -h
+          echo
+
+          echo "================ REMOVE SWIFT TOOLCHAIN ================"
+          echo "Removing Swift from /usr/share/swift"
+          sudo rm -rf /usr/share/swift || true
+          df -h
+          echo
+
+          echo "================ REMOVE HASKELL (GHCUP) ================"
+          echo "Removing GHC toolchains from /usr/local/.ghcup"
+          sudo rm -rf /usr/local/.ghcup || true
+          df -h
+          echo
+
+          echo "================ REMOVE JULIA ================"
+          echo "Removing Julia installations from /usr/local/julia*"
+          sudo rm -rf /usr/local/julia* || true
+          df -h
+          echo
+
+          echo "================ REMOVE ANDROID SDKs ================"
+          echo "Removing Android SDKs from /usr/local/lib/android"
+          sudo rm -rf /usr/local/lib/android || true
+          df -h
+          echo
+
+          echo "================ REMOVE CHROMIUM ================"
+          echo "Removing Chromium from /usr/local/share/chromium"
+          sudo rm -rf /usr/local/share/chromium || true
+          df -h
+          echo
+
+          echo "================ REMOVE EDGE & CHROME BUILDS ================"
+          echo "Removing Microsoft Edge and Google Chrome from /opt"
+          sudo rm -rf /opt/microsoft /opt/google || true
+          df -h
+          echo
+
+          echo "================ REMOVE POWERSHELL ================"
+          echo "Removing PowerShell from /usr/local/share/powershell"
+          sudo rm -rf /usr/local/share/powershell || true
+          df -h
+          echo
+
+          # Optional – huge space saver on GitHub runners
+          # echo "================ REMOVE HOSTED TOOLCACHE ================"
+          # echo "Removing GitHub hosted toolcache"
+          # sudo rm -rf /opt/hostedtoolcache || true
+          # df -h
+          # echo
+
+          du -d1 -h /opt/hostedtoolcache | sort -h -k1
+
+          echo "================ DOCKER: FINAL CLEANUP ================"
+          echo "Removing dangling build cache and leftover images..."
+          docker system prune -af || true
+          docker builder prune -af || true
+          df -h
+          echo
+
+          echo "================ CLEANUP COMPLETE ================"
       - name: Run integration tests
         run: |
           set -ex
@@ -215,12 +298,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2.13.2
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2 # v2.13.3
         with:
           egress-policy: audit
 
       - name: checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
           go-version: '1.24'
@@ -242,12 +325,12 @@ jobs:
       FRONTEND_REF: localhost:5000/dalec/frontend
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2.13.2
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2 # v2.13.3
         with:
           egress-policy: audit
 
       - name: checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           # We need to fetch all commits so that we can diff against the base branch
           fetch-depth: 0
